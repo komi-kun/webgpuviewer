@@ -120,6 +120,17 @@ class ImageViewerContinuousState : ImageViewerState(isVertical = true) {
     val scrollY: Float get() = synchronized(scrollLock) { scrollYInternal.toFloat() }
 
     /**
+     * Vertical scroll offset of the viewport within the current page's slot, in the same
+     * page-space pixels (at zoom 1) [getPageSlotHeight] measures slots in. The continuous
+     * viewer's primitive for mapping document space to viewport pixels: page slot tops come from
+     * [getPageSlotHeight] and the viewport moves by this, so an app overlay can place
+     * [visiblePages] on screen without re-deriving the scroll.
+     *
+     * Exactly [scrollY]; named for the mapping it exists to serve.
+     */
+    val scrollOffsetY: Float get() = scrollY
+
+    /**
      * Document-space top of the page at [scrollY] == 0, in screen pixels at zoom 1. The only
      * position state kept across frames: every other visible page's is re-derived from it each
      * frame (see [captureRenderState]), never stored per page - a page's identity doesn't

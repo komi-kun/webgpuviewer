@@ -127,9 +127,9 @@ open class ImagePage {
         // The rect [fillPage] fills, not all of [dst] - a page smaller than the surface would
         // otherwise warp stretched to a height it never asked for. Non-null, so transitions that
         // bail on a null pageRect still draw a Render page.
-        override fun pageRect(dst: GPUTexture): FloatArray {
-            val halfWidthFrac = scale * width / (2f * dst.width)
-            val halfHeightFrac = scale * height / (2f * dst.height)
+        override fun pageRect(surfaceWidth: Int, surfaceHeight: Int): FloatArray {
+            val halfWidthFrac = scale * width / (2f * surfaceWidth)
+            val halfHeightFrac = scale * height / (2f * surfaceHeight)
             val cx = 0.5f + scale * x
             val cy = 0.5f + scale * y
             return floatArrayOf(
@@ -708,10 +708,10 @@ open class ImagePage {
             }
         }
 
-        override fun pageRect(dst: GPUTexture): FloatArray? {
+        override fun pageRect(surfaceWidth: Int, surfaceHeight: Int): FloatArray? {
             val image = currentImage ?: return null
             if (image.mipmaps.isEmpty()) return null
-            return image.placement(dst, x, y, scale)
+            return image.placement(surfaceWidth, surfaceHeight, x, y, scale)
         }
 
         override val backgroundColor: Int?
@@ -1288,18 +1288,22 @@ open class ImagePage {
         }
 
         /** Via [leafRect], so a spread of two [Render] sides still has a rect. */
-        override fun pageRect(dst: GPUTexture): FloatArray? =
-            leafRect(dst, true) ?: leafRect(dst, false)
+        override fun pageRect(surfaceWidth: Int, surfaceHeight: Int): FloatArray? =
+            leafRect(surfaceWidth, surfaceHeight, true)
+                ?: leafRect(surfaceWidth, surfaceHeight, false)
 
         /** That side's own rect, so a spread turns one real page rather than half of a sheet. */
-        override fun leafRect(dst: GPUTexture, left: Boolean): FloatArray? {
+        override fun leafRect(
+            surfaceWidth: Int, surfaceHeight: Int, left: Boolean
+        ): FloatArray? {
             val side = (if (left) this.left else this.right) ?: return null
             val sideScale = sideScale(side)
-            val placeX = x + (if (left) -0.5f else 0.5f) * sideWidth(side) / dst.width
+            val placeX = x + (if (left) -0.5f else 0.5f) * sideWidth(side) / surfaceWidth
             (side as? ImageSingle)?.currentImage?.let { image ->
                 if (image.mipmaps.isNotEmpty()) {
                     return image.placement(
-                        dst,
+                        surfaceWidth,
+                        surfaceHeight,
                         (placeX + WebGpuRenderer.offsetX) / sideScale - WebGpuRenderer.offsetX,
                         (y + WebGpuRenderer.offsetY) / sideScale - WebGpuRenderer.offsetY,
                         scale * sideScale
@@ -1310,22 +1314,22 @@ open class ImagePage {
             if (side !is Render) return null
             val cx = 0.5f + scale * (placeX + WebGpuRenderer.offsetX)
             val cy = 0.5f + scale * (y + WebGpuRenderer.offsetY)
-            val hw = scale * 0.5f * sideWidth(side) / dst.width
-            val hh = scale * 0.5f * side.height * sideScale / dst.height
+            val hw = scale * 0.5f * sideWidth(side) / surfaceWidth
+            val hh = scale * 0.5f * side.height * sideScale / surfaceHeight
             return floatArrayOf(cx - hw, cy - hh, cx + hw, cy + hh)
         }
 
         /** The seam, not the midpoint - the two sides can be different widths. */
-        override fun spineX(dst: GPUTexture): Float? {
-            leafRect(dst, true)?.let { return it[2] }
-            leafRect(dst, false)?.let { return it[0] }
+        override fun spineX(surfaceWidth: Int, surfaceHeight: Int): Float? {
+            leafRect(surfaceWidth, surfaceHeight, true)?.let { return it[2] }
+            leafRect(surfaceWidth, surfaceHeight, false)?.let { return it[0] }
             return null
         }
 
         /** Both sides at once - the spread as one sheet, rather than [pageRect]'s single page. */
-        override fun wholeRect(dst: GPUTexture): FloatArray? {
-            val l = leafRect(dst, true)
-            val r = leafRect(dst, false)
+        override fun wholeRect(surfaceWidth: Int, surfaceHeight: Int): FloatArray? {
+            val l = leafRect(surfaceWidth, surfaceHeight, true)
+            val r = leafRect(surfaceWidth, surfaceHeight, false)
             if (l == null || r == null) return l ?: r
             return floatArrayOf(
                 min(l[0], r[0]), min(l[1], r[1]), max(l[2], r[2]), max(l[3], r[3])
@@ -1550,12 +1554,20 @@ open class ImagePage {
     }
 
     /**
-     * This page's own rect within a flat render of it into [dst], as normalised (x1, y1, x2, y2)
-     * surface coordinates - for a warp transition ([ca.mpreg.webgpuviewer.transition.TransitionSphere]/
-     * flip) to map the page's actual rect rather than treating it as screen-shaped. Null if this
-     * page has nothing to draw, which is always true for a non-[Images] page.
+     * This page's own rect within a flat render of it onto a [surfaceWidth] x [surfaceHeight]
+     * surface, as normalised (x1, y1, x2, y2) surface coordinates - for a warp transition
+     * ([ca.mpreg.webgpuviewer.transition.TransitionSphere]/flip) to map the page's actual rect
+     * rather than treating it as screen-shaped, and for an app mapping page content onto the
+     * viewer's surface (e.g. an overlay) without holding a [GPUTexture]. Null if this page has
+     * nothing to draw, which is always true for a non-[Images] page.
+     *
+     * The surface size is the primitive; the [GPUTexture] overload just reads `dst.width`/
+     * `dst.height` and delegates here.
      */
-    open fun pageRect(dst: GPUTexture): FloatArray? = null
+    open fun pageRect(surfaceWidth: Int, surfaceHeight: Int): FloatArray? = null
+
+    /** [pageRect] against [dst]'s size - see there. */
+    open fun pageRect(dst: GPUTexture): FloatArray? = pageRect(dst.width, dst.height)
 
     /**
      * One half of this page, normalised like [pageRect] - for
@@ -1563,18 +1575,27 @@ open class ImagePage {
      * own rect, null where it has no page; everything else splits [pageRect] down the middle, which
      * is what lets a single page turn like a spread.
      */
-    internal open fun leafRect(dst: GPUTexture, left: Boolean): FloatArray? {
-        val r = pageRect(dst) ?: return null
+    internal open fun leafRect(
+        surfaceWidth: Int, surfaceHeight: Int, left: Boolean
+    ): FloatArray? {
+        val r = pageRect(surfaceWidth, surfaceHeight) ?: return null
         val mid = (r[0] + r[2]) * 0.5f
         return if (left) floatArrayOf(r[0], r[1], mid, r[3])
         else floatArrayOf(mid, r[1], r[2], r[3])
     }
 
+    /** [leafRect] against [dst]'s size - see there. */
+    internal open fun leafRect(dst: GPUTexture, left: Boolean): FloatArray? =
+        leafRect(dst.width, dst.height, left)
+
     /** Where this page's two [leafRect] halves meet - the spine a page flip turns about. */
-    internal open fun spineX(dst: GPUTexture): Float? {
-        val r = pageRect(dst) ?: return null
+    internal open fun spineX(surfaceWidth: Int, surfaceHeight: Int): Float? {
+        val r = pageRect(surfaceWidth, surfaceHeight) ?: return null
         return (r[0] + r[2]) * 0.5f
     }
+
+    /** [spineX] against [dst]'s size - see there. */
+    internal open fun spineX(dst: GPUTexture): Float? = spineX(dst.width, dst.height)
 
     /**
      * The color a transition should blend/fade toward for this page as a whole - [Images] reads
@@ -1727,7 +1748,11 @@ open class ImagePage {
      * sides together where [pageRect] gives whichever it finds first, so a transition treating the
      * page as one sheet wants this one.
      */
-    internal open fun wholeRect(dst: GPUTexture): FloatArray? = pageRect(dst)
+    internal open fun wholeRect(surfaceWidth: Int, surfaceHeight: Int): FloatArray? =
+        pageRect(surfaceWidth, surfaceHeight)
+
+    /** [wholeRect] against [dst]'s size - see there. */
+    internal open fun wholeRect(dst: GPUTexture): FloatArray? = wholeRect(dst.width, dst.height)
 
     /** What [drawFade] veils - the whole page, so a spread does not half-fade. */
     protected open fun fadeRect(dst: GPUTexture): FloatArray? = wholeRect(dst)
