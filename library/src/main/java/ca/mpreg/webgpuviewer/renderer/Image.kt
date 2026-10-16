@@ -559,21 +559,30 @@ class Image private constructor(
     }
 
     /**
-     * Where this image's full extent lands in [dst], as normalised (x1, y1, x2, y2) surface
-     * coordinates - the same placement [prepareForRender] resolves to, but without going through
-     * a mip level or [Mipmap.getQuad]. For callers that only want geometry (a background rect,
-     * [ca.mpreg.webgpuviewer.viewer.ImagePage.ImageSingle.pageRect]) with no reason to touch mip/tile
-     * selection.
+     * Where this image's full extent lands on a surface of [surfaceWidth] x [surfaceHeight], as
+     * normalised (x1, y1, x2, y2) surface coordinates - the same placement [prepareForRender]
+     * resolves to, but without going through a mip level or [Mipmap.getQuad].
+     *
+     * The size is the primitive, not a [GPUTexture]: this resolves geometry only, and a texture is
+     * the one thing a caller mapping between page and screen coordinates does not have (an app
+     * overlaying the viewer knows its own surface size). The [GPUTexture] overload delegates here,
+     * reading nothing from [dst] but its size.
      */
-    fun placement(dst: GPUTexture, x: Float, y: Float, scale: Float): FloatArray {
-        val adjustedX = x + this.x / dst.width + WebGpuRenderer.offsetX
-        val adjustedY = y + this.y / dst.height + WebGpuRenderer.offsetY
-        val x1 = 0.5f + scale * (adjustedX - 0.5f * width / dst.width)
-        val y1 = 0.5f + scale * (adjustedY - 0.5f * height / dst.height)
+    fun placement(
+        surfaceWidth: Int, surfaceHeight: Int, x: Float, y: Float, scale: Float
+    ): FloatArray {
+        val adjustedX = x + this.x / surfaceWidth + WebGpuRenderer.offsetX
+        val adjustedY = y + this.y / surfaceHeight + WebGpuRenderer.offsetY
+        val x1 = 0.5f + scale * (adjustedX - 0.5f * width / surfaceWidth)
+        val y1 = 0.5f + scale * (adjustedY - 0.5f * height / surfaceHeight)
         return floatArrayOf(
-            x1, y1, x1 + scale * width / dst.width, y1 + scale * height / dst.height
+            x1, y1, x1 + scale * width / surfaceWidth, y1 + scale * height / surfaceHeight
         )
     }
+
+    /** [placement] against [dst]'s size - see there. */
+    fun placement(dst: GPUTexture, x: Float, y: Float, scale: Float): FloatArray =
+        placement(dst.width, dst.height, x, y, scale)
 
     /**
      * Where a draw lands ([dstLeft].., target pixels), the bound texels mapped onto it

@@ -46,6 +46,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 open class ImageViewerState(var isVertical: Boolean = false, var isReversed: Boolean = false) {
     val renderer = WebGpuRenderer()
@@ -228,6 +229,28 @@ open class ImageViewerState(var isVertical: Boolean = false, var isReversed: Boo
 
     internal fun isOnScreen(page: ImagePage): Boolean = onScreenPages.any { it.covers(page) }
 
+    /**
+     * The pages the last frame drew, in draw order - the paged viewer's current page plus any
+     * neighbour a turn currently has on screen; the continuous viewer's every page in the visible
+     * band. Off the last frame rather than re-fetched, so it changes when a frame that draws
+     * different pages does. Empty until the first frame.
+     *
+     * For an app mapping its own content (e.g. an overlay) onto the viewer. Pair each page with
+     * [rectOf]; in the continuous viewer, where pages are laid out in document space instead of
+     * by their own transform, use
+     * [ca.mpreg.webgpuviewer.viewer.ImageViewerContinuousState.scrollOffsetY] together with
+     * [ca.mpreg.webgpuviewer.viewer.ImageViewerContinuousState.getPageSlotHeight] instead.
+     */
+    val visiblePages: List<ImagePage> get() = onScreenPages
+
+    /**
+     * Where [page] is drawn right now, as viewport-normalised (x1, y1, x2, y2) surface
+     * coordinates, or null if it has nothing drawable (undecoded, or a page with no image). No
+     * [GPUTexture] needed - see [ImagePage.pageRect]. Meaningful for the paged viewer; the
+     * continuous viewer's pages are laid out in document space, so see [visiblePages].
+     */
+    fun rectOf(page: ImagePage): FloatArray? = page.wholeRect(width, height)
+
     @Synchronized
     fun init(scope: CoroutineScope, surface: Surface, width: Int, height: Int) {
         this.renderer.init(scope, surface, width, height)
@@ -266,7 +289,19 @@ open class ImageViewerState(var isVertical: Boolean = false, var isReversed: Boo
     // Wakes [collect] when there is nothing to draw. Buffered, so no send races [dirty]'s check.
     private val renderWake = Channel<Unit>(Channel.CONFLATED)
 
+    private val _transformVersion = AtomicLong()
+
+    /**
+     * Monotonic token that ticks on every redraw request - a pan/zoom on the current page, a page
+     * turn or scroll, a resize, a decoded page arriving. An app overlay samples it once per frame
+     * to tell cheaply whether the mapping may have moved and a remap/redraw is worth doing, instead
+     * of re-deriving geometry unconditionally. It only ever increases; anything more than "changed
+     * since last sampled" is not meaningful.
+     */
+    val transformVersion: Long get() = _transformVersion.get()
+
     fun invalidate() {
+        _transformVersion.incrementAndGet()
         dirty.set(true)
         renderWake.trySend(Unit)
     }
