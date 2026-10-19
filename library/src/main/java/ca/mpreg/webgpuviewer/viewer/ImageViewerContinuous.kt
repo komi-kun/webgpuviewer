@@ -167,7 +167,8 @@ fun ImageViewerContinuous(
                 if (waitForCleanUp(firstDown.id, doubleTapTimeout, touchSlop) != null) {
                     longPressJob?.cancel()
                     // A touch that only stopped motion can still be the first of a pair.
-                    val secondDown = waitForDown(doubleTapTimeout)
+                    val secondDown =
+                        if (state.doubleTapGesturesEnabled) waitForDown(doubleTapTimeout) else null
                     if (secondDown == null) {
                         if (!stoppedMotion) {
                             state.onTap?.invoke(
